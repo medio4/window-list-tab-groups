@@ -1,0 +1,11 @@
+{
+  "name": "Window List (Previews)",
+  "description": "Fork of GNOME Window List with hover window previews.",
+  "uuid": "window-list-previews@jacobcorbley",
+  "gettext-domain": "gnome-shell-extensions",
+  "settings-schema": "org.gnome.shell.extensions.window-list",
+  "shell-version": [
+    "50"
+  ],
+  "version-name": "50.4-previews.1"
+}
