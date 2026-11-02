@@ -1627,7 +1627,7 @@ class WindowList extends St.Widget {
         menu.addMenuItem(section, 0);
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem(), 1);
 
-        menu.connect('open-state-changed', () => {
+        menu.connectObject('open-state-changed', () => {
             if (!menu.isOpen)
                 return;
 
@@ -1655,7 +1655,7 @@ class WindowList extends St.Widget {
                 section.addAction(_('Remove from group'),
                     () => this._removeFromTabGroup(button));
             }
-        });
+        }, button);
     }
 
     _createTabGroup(button) {
