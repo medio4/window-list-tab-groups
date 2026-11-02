@@ -12,7 +12,8 @@ Dragging a window into a group opens a gap in the group's color:
 
 ![Window menu with group options](screenshots/window-menu.png)
 
-- **Group windows:** right-click a window → **Add to new group**, then name the group and pick a color.
+- **Group windows:** right-click a window in the bar, or its title bar (or press Alt+Space) →
+  **Add to new group**, then name the group and pick a color.
 - **Add or move:** right-click another window → **Add to “…”**, or drag it into the group. The gap
   takes the group's color when the window will join it; grey means outside any group. To add to a
   collapsed group, drop on the middle of its label.

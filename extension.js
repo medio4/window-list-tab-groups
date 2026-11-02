@@ -21,6 +21,7 @@ import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {DashItemContainer} from 'resource:///org/gnome/shell/ui/dash.js';
+import {WindowMenu} from 'resource:///org/gnome/shell/ui/windowMenu.js';
 
 const WINDOW_LIST_UUID = 'window-list@gnome-shell-extensions.gcampax.github.com';
 
@@ -463,34 +464,42 @@ class TabGroupController {
         button._tabGroupSeparator = separator;
 
         menu.connectObject('open-state-changed', () => {
-            if (!menu.isOpen)
-                return;
-
-            section.removeAll();
-            const current = button._tabGroup;
-
-            section.addAction(_('Add to new group'),
-                () => this._createGroup(button));
-
-            for (const group of this._groups.values()) {
-                if (group === current)
-                    continue;
-                const label = current ? _('Move to “%s”') : _('Add to “%s”');
-                const item = section.addAction(
-                    label.format(group.name || _('Unnamed group')),
-                    () => this.moveToGroup(button, group));
-                item.insert_child_at_index(new St.Widget({
-                    style_class: 'tab-group-menu-dot',
-                    style: `background-color: ${TAB_GROUP_COLORS[group.color]};`,
-                    y_align: Clutter.ActorAlign.CENTER,
-                }), 1);
-            }
-
-            if (current) {
-                section.addAction(_('Remove from group'),
-                    () => this.removeFromGroup(button));
-            }
+            if (menu.isOpen)
+                this.fillGroupItems(section, button);
         }, section);
+    }
+
+    // The "Add to …" items for a window, in the bottom bar's window menu
+    // and in the window's own title bar menu
+    fillGroupItems(section, button) {
+        section.removeAll();
+        const current = button._tabGroup;
+
+        section.addAction(_('Add to new group'),
+            () => this._createGroup(button));
+
+        for (const group of this._groups.values()) {
+            if (group === current)
+                continue;
+            const label = current ? _('Move to “%s”') : _('Add to “%s”');
+            const item = section.addAction(
+                label.format(group.name || _('Unnamed group')),
+                () => this.moveToGroup(button, group));
+            item.insert_child_at_index(new St.Widget({
+                style_class: 'tab-group-menu-dot',
+                style: `background-color: ${TAB_GROUP_COLORS[group.color]};`,
+                y_align: Clutter.ActorAlign.CENTER,
+            }), 1);
+        }
+
+        if (current) {
+            section.addAction(_('Remove from group'),
+                () => this.removeFromGroup(button));
+        }
+    }
+
+    findButton(metaWindow) {
+        return this._windowButtons().find(b => b.metaWindow === metaWindow) ?? null;
     }
 
     _createGroup(button) {
@@ -802,6 +811,7 @@ export default class WindowListTabGroupsExtension extends Extension {
         this._injections = new InjectionManager();
         this._listPatched = false;
         this._buttonPatched = false;
+        this._patchWindowMenu();
 
         // The Window List may be enabled after us or turned off and on, and
         // it builds its lists once monitors are known (and again when they
@@ -826,6 +836,32 @@ export default class WindowListTabGroupsExtension extends Extension {
             delete this._attachId;
             this._attach();
         });
+    }
+
+    _patchWindowMenu() {
+        const extension = this;
+        this._injections.overrideMethod(WindowMenu.prototype, '_buildMenu',
+            original => function (window) {
+                original.call(this, window);
+                extension._addWindowMenuItems(this, window);
+            });
+    }
+
+    // Offer the group items in a window's title bar menu, above "Close"
+    _addWindowMenuItems(menu, window) {
+        for (const list of this._getWindowLists()) {
+            const controller = list._tabGroups;
+            const button = controller?.findButton(window);
+            if (!button)
+                continue;
+
+            const section = new PopupMenu.PopupMenuSection();
+            controller.fillGroupItems(section, button);
+            menu.addMenuItem(section, menu.numMenuItems - 1);
+            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem(),
+                menu.numMenuItems - 1);
+            return;
+        }
     }
 
     _getWindowLists() {
