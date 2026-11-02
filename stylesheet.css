@@ -1,0 +1,66 @@
+/* SPDX-FileCopyrightText: 2026 Jacob Corbley
+ * SPDX-License-Identifier: GPL-2.0-or-later */
+
+.tab-group-chip {
+  color: #202124;
+  font-weight: bold;
+  /* Same height and corners as the window buttons beside it */
+  border-radius: 4px;
+  margin: 4px 1px 4px 6px;
+  padding: 0 8px;
+  min-width: 12px;
+  transition: 100ms ease;
+}
+
+.tab-group-chip:hover {
+  box-shadow: inset 0 0 0 100px rgba(255,255,255,0.3);
+}
+
+.tab-group-chip:active {
+  box-shadow: inset 0 0 0 100px rgba(0,0,0,0.1);
+}
+
+/* A window is being dragged onto the group */
+.tab-group-chip:drop {
+  box-shadow: 0 0 0 2px -st-accent-color;
+}
+
+/* Collapsed groups turn into a pill, like Chrome */
+.tab-group-chip:checked {
+  border-radius: 99px;
+}
+
+.tab-group-line {
+  height: 2px;
+  border-radius: 1px;
+}
+
+.tab-group-name-entry {
+  min-width: 14em;
+}
+
+.tab-group-color-box {
+  spacing: 6px;
+}
+
+.tab-group-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 99px;
+  border: 2px solid transparent;
+}
+
+.tab-group-swatch:hover,
+.tab-group-swatch:focus {
+  border-color: rgba(128,128,128,0.6);
+}
+
+.tab-group-swatch:checked {
+  border-color: -st-accent-color;
+}
+
+.tab-group-menu-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 99px;
+}

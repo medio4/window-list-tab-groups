@@ -1,12 +1,11 @@
 {
   "name": "Window List Tab Groups",
-  "description": "A bottom window list with Chrome-style tab groups.\n\nRight-click a window to add it to a group. Click a group's colored label to collapse or expand it, and right-click the label to rename it, change its color, ungroup it or close its windows. Drag windows into or out of a group to regroup them.\n\nBased on the GNOME Shell Window List extension.",
+  "description": "Adds Chrome-style tab groups to the Window List bottom bar.\n\nRight-click a window to add it to a group. Click a group's colored label to collapse or expand it, drag the label to move the group, and right-click it to rename, recolor, ungroup or close the group. Drag a window onto a group to add it, or away from it to take it out.\n\nRequires the Window List extension (window-list@gnome-shell-extensions.gcampax.github.com) to be enabled.",
   "uuid": "window-list-tab-groups@jacobcorbley",
   "gettext-domain": "window-list-tab-groups",
-  "settings-schema": "org.gnome.shell.extensions.window-list-tab-groups",
   "shell-version": [
     "50"
   ],
   "url": "https://github.com/medio4/window-list-tab-groups",
-  "version-name": "1.0"
+  "version-name": "2.0"
 }
