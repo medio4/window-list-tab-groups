@@ -48,6 +48,21 @@ const GroupingMode = {
     ALWAYS: 2,
 };
 
+const TAB_GROUPS_KEY = 'window-list-tab-groups';
+
+// Chrome's tab group palette (dark variants, readable with dark text)
+const TAB_GROUP_COLORS = {
+    grey: '#dadce0',
+    blue: '#8ab4f8',
+    red: '#f28b82',
+    yellow: '#fdd663',
+    green: '#81c995',
+    pink: '#ff8bcb',
+    purple: '#c58af9',
+    cyan: '#78d9ec',
+    orange: '#fcad70',
+};
+
 class DragPlaceholderItem extends DashItemContainer {
     static {
         GObject.registerClass(this);
@@ -685,7 +700,19 @@ class WindowButton extends BaseButton {
         if (this._unmanaging)
             return;
 
-        this.visible = this._isWindowVisible(this.metaWindow);
+        this.visible = !this._tabGroup?.collapsed &&
+            this._isWindowVisible(this.metaWindow);
+    }
+
+    get tabGroup() {
+        return this._tabGroup ?? null;
+    }
+
+    setTabGroup(group) {
+        this._tabGroup = group;
+        this._windowTitle.style = group
+            ? `border-color: ${TAB_GROUP_COLORS[group.color]};` : null;
+        this._updateVisibility();
     }
 
     _updateIconGeometry() {
@@ -914,6 +941,147 @@ class AppButton extends BaseButton {
     }
 }
 
+class TabGroupMenu extends PopupMenu.PopupMenu {
+    constructor(source, group, owner) {
+        super(source, 0.5, St.Side.BOTTOM);
+
+        this._group = group;
+        this._owner = owner;
+
+        const nameItem = new PopupMenu.PopupBaseMenuItem({
+            reactive: false,
+            can_focus: false,
+        });
+        this._entry = new St.Entry({
+            style_class: 'tab-group-name-entry',
+            hint_text: _('Name this group'),
+            can_focus: true,
+            x_expand: true,
+        });
+        this._entry.clutter_text.connect('text-changed',
+            () => this._owner.renameTabGroup(this._group, this._entry.text));
+        this._entry.clutter_text.connect('activate', () => this.close());
+        nameItem.add_child(this._entry);
+        this.addMenuItem(nameItem);
+
+        const colorItem = new PopupMenu.PopupBaseMenuItem({
+            reactive: false,
+            can_focus: false,
+        });
+        const colorBox = new St.BoxLayout({style_class: 'tab-group-color-box'});
+        this._swatches = new Map();
+        for (const [name, color] of Object.entries(TAB_GROUP_COLORS)) {
+            const swatch = new St.Button({
+                style_class: 'tab-group-swatch',
+                style: `background-color: ${color};`,
+                can_focus: true,
+            });
+            swatch.connect('clicked',
+                () => this._owner.setTabGroupColor(this._group, name));
+            colorBox.add_child(swatch);
+            this._swatches.set(name, swatch);
+        }
+        colorItem.add_child(colorBox);
+        this.addMenuItem(colorItem);
+
+        this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._collapseItem = this.addAction('',
+            () => this._owner.toggleTabGroup(this._group));
+        this.addAction(_('Ungroup'),
+            () => this._owner.ungroupTabGroup(this._group));
+        this.addAction(_('Close group'),
+            () => this._owner.closeTabGroup(this._group));
+
+        this.connect('open-state-changed', () => {
+            if (this.isOpen)
+                this.sync();
+        });
+    }
+
+    sync() {
+        if (this._entry.text !== this._group.name)
+            this._entry.text = this._group.name;
+        this._collapseItem.label.text = this._group.collapsed
+            ? _('Expand group') : _('Collapse group');
+        for (const [name, swatch] of this._swatches) {
+            if (name === this._group.color)
+                swatch.add_style_pseudo_class('checked');
+            else
+                swatch.remove_style_pseudo_class('checked');
+        }
+    }
+
+    focusName() {
+        this._entry.grab_key_focus();
+        this._entry.clutter_text.set_selection(0, -1);
+    }
+}
+
+class TabGroupChip extends St.Button {
+    static {
+        GObject.registerClass(this);
+    }
+
+    constructor(group, owner) {
+        super({
+            style_class: 'tab-group-chip',
+            can_focus: true,
+            y_align: Clutter.ActorAlign.CENTER,
+            button_mask: St.ButtonMask.ONE | St.ButtonMask.THREE,
+        });
+
+        this.group = group;
+
+        this._label = new St.Label({y_align: Clutter.ActorAlign.CENTER});
+        this.set_child(this._label);
+
+        this._menu = new TabGroupMenu(this, group, owner);
+        this._menu.actor.hide();
+        this._menuManager = new PopupMenu.PopupMenuManager(this);
+        this._menuManager.addMenu(this._menu);
+        Main.uiGroup.add_child(this._menu.actor);
+
+        this.connect('clicked', (_actor, button) => {
+            if (button === 3)
+                this.openMenu();
+            else
+                owner.toggleTabGroup(group);
+        });
+        this.connect('popup-menu', () => this.openMenu());
+        this.connect('destroy', () => this._menu.destroy());
+    }
+
+    openMenu(focusName = false) {
+        if (!this._menu.isOpen)
+            this._menu.open();
+        if (focusName)
+            this._menu.focusName();
+    }
+
+    sync(nWindows, hasFocus) {
+        const {name, color, collapsed} = this.group;
+        this._label.text = collapsed
+            ? [name, `${nWindows}`].filter(s => s).join('  ')
+            : name;
+        this.style = `background-color: ${TAB_GROUP_COLORS[color]};`;
+        this.accessible_name = name || _('Unnamed group');
+
+        if (collapsed)
+            this.add_style_pseudo_class('checked');
+        else
+            this.remove_style_pseudo_class('checked');
+
+        if (hasFocus)
+            this.add_style_class_name('focused');
+        else
+            this.remove_style_class_name('focused');
+
+        if (this._menu.isOpen)
+            this._menu.sync();
+    }
+}
+
 class WindowList extends St.Widget {
     static {
         GObject.registerClass(this);
@@ -1016,8 +1184,13 @@ class WindowList extends St.Widget {
             () => this._updateWorkspaceIndicatorVisibility(), this);
         this._updateWorkspaceIndicatorVisibility();
 
-        global.window_manager.connectObject('switch-workspace',
-            () => this._checkGrouping(), this);
+        global.window_manager.connectObject('switch-workspace', () => {
+            this._checkGrouping();
+            this._syncTabGroupChips();
+        }, this);
+
+        global.display.connectObject('notify::focus-window',
+            () => this._onFocusWindowChanged(), this);
 
         Main.overview.connectObject(
             'showing', () => {
@@ -1064,6 +1237,8 @@ class WindowList extends St.Widget {
 
         this._delegate = this;
 
+        this._loadTabGroups();
+
         this._settings = extension.getSettings();
         this._settings.connectObject('changed::grouping-mode',
             () => this._groupingModeChanged(), this);
@@ -1089,7 +1264,7 @@ class WindowList extends St.Widget {
             return;
 
         const children = this._windowList.get_children()
-            .filter(c => c.visible);
+            .filter(c => c instanceof BaseButton && c.visible);
         const active = children.findIndex(c => c.active);
         const newActive = Math.max(0, Math.min(active + diff, children.length - 1));
         children[newActive].activate();
@@ -1144,7 +1319,8 @@ class WindowList extends St.Widget {
         if (this._windowList.get_n_children() === 0)
             return this._windowList.get_preferred_width(-1)[1];
 
-        const children = this._windowList.get_children();
+        const children = this._windowList.get_children()
+            .filter(c => c instanceof BaseButton);
         const [, childWidth] = children[0].get_preferred_width(-1);
         const {spacing} = this._windowList.layout_manager;
 
@@ -1209,6 +1385,7 @@ class WindowList extends St.Widget {
         }
 
         this._restorePositions();
+        this._layoutTabGroups();
     }
 
     _updateKeyboardAnchor() {
@@ -1278,7 +1455,9 @@ class WindowList extends St.Widget {
             win, win.connect('unmanaged', () => this._removeWindow(win)));
 
         const button = new WindowButton(win, this._perMonitor, this._monitor.index);
+        this._addTabGroupMenuItems(button);
         this._addButton(button, animate);
+        this._layoutTabGroups();
     }
 
     _removeWindow(win) {
@@ -1295,7 +1474,282 @@ class WindowList extends St.Widget {
 
         const children = this._windowList.get_children();
         const child = children.find(c => c.metaWindow === win);
+        if (child?.tabGroup)
+            this._removeFromTabGroup(child);
         child?.animateOutAndDestroy();
+    }
+
+    _getTabGroupsStateKey() {
+        return `${TAB_GROUPS_KEY}:${this._monitor.index}`;
+    }
+
+    _loadTabGroups() {
+        this._tabGroups = new Map();
+        this._nextTabGroupId = 1;
+
+        let saved = [];
+        try {
+            const state = global.get_runtime_state('s',
+                this._getTabGroupsStateKey());
+            saved = JSON.parse(state?.deepUnpack() ?? '[]');
+        } catch (e) {
+            console.warn(`Ignoring saved tab groups: ${e.message}`);
+        }
+
+        for (const {id, name, color, collapsed, windows} of saved) {
+            this._tabGroups.set(id, {
+                id,
+                name,
+                color: color in TAB_GROUP_COLORS ? color : 'grey',
+                collapsed,
+                windows: new Set(windows),
+                chip: null,
+            });
+            this._nextTabGroupId = Math.max(this._nextTabGroupId, id + 1);
+        }
+    }
+
+    _saveTabGroups() {
+        const groups = [...this._tabGroups.values()].map(g => ({
+            id: g.id,
+            name: g.name,
+            color: g.color,
+            collapsed: g.collapsed,
+            windows: [...g.windows],
+        }));
+        global.set_runtime_state(this._getTabGroupsStateKey(),
+            new GLib.Variant('s', JSON.stringify(groups)));
+    }
+
+    _getWindowButtons() {
+        return this._windowList.get_children()
+            .filter(c => c instanceof WindowButton);
+    }
+
+    _findTabGroup(metaWindow) {
+        const id = metaWindow.get_id();
+        for (const group of this._tabGroups.values()) {
+            if (group.windows.has(id))
+                return group;
+        }
+        return null;
+    }
+
+    _deleteTabGroup(group) {
+        this._tabGroups.delete(group.id);
+        group.chip?.destroy();
+        group.chip = null;
+    }
+
+    // Keep each group's chip directly in front of its windows, and the
+    // windows of a group next to each other (where the first one sits)
+    _layoutTabGroups() {
+        if (this._grouped) {
+            this._tabGroups.forEach(g => g.chip?.destroy());
+            return;
+        }
+
+        const buttons = this._getWindowButtons();
+        const present = new Set(buttons.map(b => b.metaWindow.get_id()));
+        for (const group of [...this._tabGroups.values()]) {
+            group.windows.forEach(id => !present.has(id) && group.windows.delete(id));
+            if (group.windows.size === 0)
+                this._deleteTabGroup(group);
+        }
+
+        const order = [];
+        const placed = new Set();
+        for (const button of buttons) {
+            const group = this._findTabGroup(button.metaWindow);
+            button.setTabGroup(group);
+
+            if (!group) {
+                order.push(button);
+                continue;
+            }
+            if (placed.has(group))
+                continue;
+            placed.add(group);
+
+            if (!group.chip) {
+                const chip = new TabGroupChip(group, this);
+                chip.connect('destroy', () => {
+                    if (group.chip === chip)
+                        group.chip = null;
+                });
+                group.chip = chip;
+                this._windowList.add_child(chip);
+            }
+            order.push(group.chip, ...buttons.filter(
+                b => this._findTabGroup(b.metaWindow) === group));
+        }
+
+        order.forEach((actor, i) => {
+            if (this._windowList.get_child_at_index(i) !== actor)
+                this._windowList.set_child_at_index(actor, i);
+        });
+
+        this._syncTabGroupChips();
+        this._saveTabGroups();
+    }
+
+    _syncTabGroupChips() {
+        const buttons = this._getWindowButtons();
+        const {focusWindow} = global.display;
+
+        for (const group of this._tabGroups.values()) {
+            if (!group.chip)
+                continue;
+            const members = buttons.filter(b => b.tabGroup === group);
+            group.chip.visible = members.some(b => b._isWindowVisible(b.metaWindow));
+            group.chip.sync(members.length,
+                members.some(b => b.metaWindow === focusWindow));
+        }
+    }
+
+    _onFocusWindowChanged() {
+        const {focusWindow} = global.display;
+        const switched = focusWindow && focusWindow !== this._lastFocusWindow;
+        if (focusWindow)
+            this._lastFocusWindow = focusWindow;
+        const group = focusWindow ? this._findTabGroup(focusWindow) : null;
+
+        // Like Chrome, switching to a window of a collapsed group opens it up
+        if (switched && group?.collapsed && !this._grouped)
+            this.toggleTabGroup(group);
+        else
+            this._syncTabGroupChips();
+    }
+
+    _addTabGroupMenuItems(button) {
+        const menu = button._contextMenu;
+        const section = new PopupMenu.PopupMenuSection();
+        menu.addMenuItem(section, 0);
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem(), 1);
+
+        menu.connect('open-state-changed', () => {
+            if (!menu.isOpen)
+                return;
+
+            section.removeAll();
+            const current = button.tabGroup;
+
+            section.addAction(_('Add to new group'),
+                () => this._createTabGroup(button));
+
+            for (const group of this._tabGroups.values()) {
+                if (group === current)
+                    continue;
+                const label = current ? _('Move to “%s”') : _('Add to “%s”');
+                const item = section.addAction(
+                    label.format(group.name || _('Unnamed group')),
+                    () => this._moveToTabGroup(button, group));
+                item.insert_child_at_index(new St.Widget({
+                    style_class: 'tab-group-menu-dot',
+                    style: `background-color: ${TAB_GROUP_COLORS[group.color]};`,
+                    y_align: Clutter.ActorAlign.CENTER,
+                }), 1);
+            }
+
+            if (current) {
+                section.addAction(_('Remove from group'),
+                    () => this._removeFromTabGroup(button));
+            }
+        });
+    }
+
+    _createTabGroup(button) {
+        const used = new Set([...this._tabGroups.values()].map(g => g.color));
+        const colors = Object.keys(TAB_GROUP_COLORS);
+        const color = colors.find(c => c !== 'grey' && !used.has(c)) ??
+            colors[this._nextTabGroupId % colors.length];
+
+        const group = {
+            id: this._nextTabGroupId++,
+            name: '',
+            color,
+            collapsed: false,
+            windows: new Set(),
+            chip: null,
+        };
+        this._tabGroups.set(group.id, group);
+        this._moveToTabGroup(button, group);
+
+        // Let the window menu finish closing before asking for a name
+        GLib.idle_add_once(GLib.PRIORITY_DEFAULT,
+            () => group.chip?.openMenu(true));
+    }
+
+    _moveToTabGroup(button, group) {
+        button.tabGroup?.windows.delete(button.metaWindow.get_id());
+        group.windows.add(button.metaWindow.get_id());
+        this._layoutTabGroups();
+    }
+
+    _removeFromTabGroup(button) {
+        const group = button.tabGroup;
+        group.windows.delete(button.metaWindow.get_id());
+
+        // Leave the group by stepping out behind its last window
+        const members = this._getWindowButtons().filter(b => b.tabGroup === group);
+        const last = members[members.length - 1];
+        if (last && last !== button)
+            this._windowList.set_child_above_sibling(button, last);
+
+        this._layoutTabGroups();
+    }
+
+    _joinTabGroupFromNeighbors(button) {
+        const items = this._windowList.get_children().filter(c =>
+            c !== this._dragPlaceholder && (c === button || c.visible));
+        const i = items.indexOf(button);
+        const prev = items[i - 1];
+        const next = items[i + 1];
+        const groupOf = a => (a instanceof WindowButton ? a.tabGroup : null);
+        const current = button.tabGroup;
+
+        let target = null;
+        if (prev instanceof TabGroupChip && !prev.group.collapsed)
+            target = prev.group;
+        else if (groupOf(prev) && groupOf(prev) === groupOf(next))
+            target = groupOf(prev);
+        else if (current && (groupOf(prev) === current || groupOf(next) === current))
+            target = current;
+
+        if (target === current)
+            return;
+
+        current?.windows.delete(button.metaWindow.get_id());
+        target?.windows.add(button.metaWindow.get_id());
+    }
+
+    toggleTabGroup(group) {
+        group.collapsed = !group.collapsed;
+        this._layoutTabGroups();
+    }
+
+    renameTabGroup(group, name) {
+        if (group.name === name)
+            return;
+        group.name = name;
+        this._syncTabGroupChips();
+        this._saveTabGroups();
+    }
+
+    setTabGroupColor(group, color) {
+        group.color = color;
+        this._layoutTabGroups();
+    }
+
+    ungroupTabGroup(group) {
+        this._deleteTabGroup(group);
+        this._layoutTabGroups();
+    }
+
+    closeTabGroup(group) {
+        this._getWindowButtons()
+            .filter(b => b.tabGroup === group)
+            .forEach(b => b.metaWindow.delete(global.get_current_time()));
     }
 
     _clearDragPlaceholder() {
@@ -1308,7 +1762,9 @@ class WindowList extends St.Widget {
         if (!(source instanceof BaseButton))
             return DND.DragMotionResult.NO_DROP;
 
-        const buttons = this._windowList.get_children().filter(c => c instanceof BaseButton);
+        // Chips take up room too, and collapsed members don't
+        const buttons = this._windowList.get_children().filter(c =>
+            (c instanceof BaseButton || c instanceof TabGroupChip) && c.visible);
         const buttonPos = buttons.indexOf(source);
         const numButtons = buttons.length;
         const boxWidth = this._windowList.width;
@@ -1352,11 +1808,18 @@ class WindowList extends St.Widget {
     }
 
     acceptDrop(source, _actor, _x, _y, _time) {
-        if (this._dragPlaceholderPos >= 0)
-            this._windowList.set_child_at_index(source, this._dragPlaceholderPos);
+        if (this._dragPlaceholder) {
+            const pos = this._windowList.get_children()
+                .indexOf(this._dragPlaceholder);
+            this._windowList.set_child_at_index(source, pos);
+
+            if (source instanceof WindowButton)
+                this._joinTabGroupFromNeighbors(source);
+        }
 
         this._clearDragPlaceholder();
 
+        this._layoutTabGroups();
         this._savePositions();
 
         return true;

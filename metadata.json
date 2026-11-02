@@ -1,11 +1,12 @@
 {
-  "name": "Window List (Previews)",
-  "description": "Fork of GNOME Window List with hover window previews.",
-  "uuid": "window-list-previews@jacobcorbley",
-  "gettext-domain": "gnome-shell-extensions",
-  "settings-schema": "org.gnome.shell.extensions.window-list",
+  "name": "Window List Tab Groups",
+  "description": "A bottom window list with Chrome-style tab groups.\n\nRight-click a window to add it to a group. Click a group's colored label to collapse or expand it, and right-click the label to rename it, change its color, ungroup it or close its windows. Drag windows into or out of a group to regroup them.\n\nBased on the GNOME Shell Window List extension.",
+  "uuid": "window-list-tab-groups@jacobcorbley",
+  "gettext-domain": "window-list-tab-groups",
+  "settings-schema": "org.gnome.shell.extensions.window-list-tab-groups",
   "shell-version": [
     "50"
   ],
-  "version-name": "50.4-previews.1"
+  "url": "https://github.com/medio4/window-list-tab-groups",
+  "version-name": "1.0"
 }

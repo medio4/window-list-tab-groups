@@ -4,16 +4,16 @@ SPDX-FileCopyrightText: 2016 Florian Müllner <fmuellner@gnome.org>
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-<schemalist gettext-domain="gnome-shell-extensions">
-  <enum id="org.gnome.shell.extensions.window-list.GroupingMode">
+<schemalist gettext-domain="window-list-tab-groups">
+  <enum id="org.gnome.shell.extensions.window-list-tab-groups.GroupingMode">
     <value value="0" nick="never"/>
     <value value="1" nick="auto"/>
     <value value="2" nick="always"/>
   </enum>
-  <schema id="org.gnome.shell.extensions.window-list"
-          path="/org/gnome/shell/extensions/window-list/">
+  <schema id="org.gnome.shell.extensions.window-list-tab-groups"
+          path="/org/gnome/shell/extensions/window-list-tab-groups/">
     <key name="grouping-mode"
-         enum="org.gnome.shell.extensions.window-list.GroupingMode">
+         enum="org.gnome.shell.extensions.window-list-tab-groups.GroupingMode">
       <default>'never'</default>
       <summary>When to group windows</summary>
       <description>
