@@ -1020,7 +1020,12 @@ class TabGroupMenu extends PopupMenu.PopupMenu {
 
 class TabGroupChip extends St.Button {
     static {
-        GObject.registerClass(this);
+        GObject.registerClass({
+            Signals: {
+                'drag-begin': {},
+                'drag-end': {},
+            },
+        }, this);
     }
 
     constructor(group, owner) {
@@ -1050,6 +1055,26 @@ class TabGroupChip extends St.Button {
         });
         this.connect('popup-menu', () => this.openMenu());
         this.connect('destroy', () => this._menu.destroy());
+
+        // Dragging the label moves the whole group
+        this._delegate = this;
+        this._draggable = DND.makeDraggable(this);
+        this._draggable.connect('drag-begin', () => this.emit('drag-begin'));
+        this._draggable.connect('drag-cancelled', () => this.emit('drag-end'));
+        this._draggable.connect('drag-end', () => this.emit('drag-end'));
+    }
+
+    getDragActor() {
+        const label = new St.Label({
+            style_class: 'tab-group-chip',
+            style: this.style,
+            text: this._label.text,
+        });
+        return new DragActor(this, label);
+    }
+
+    getDragActorSource() {
+        return this;
     }
 
     openMenu(focusName = false) {
@@ -1577,6 +1602,21 @@ class WindowList extends St.Widget {
                     if (group.chip === chip)
                         group.chip = null;
                 });
+                chip.connect('drag-begin', () => {
+                    this._getTabGroupActors(group).forEach(a => a.ease({
+                        opacity: 255 * DRAG_OPACITY,
+                        duration: DRAG_FADE_DURATION,
+                    }));
+                    this._monitorItemDrag();
+                });
+                chip.connect('drag-end', () => {
+                    this._getTabGroupActors(group).forEach(a => a.ease({
+                        opacity: 255,
+                        duration: DRAG_FADE_DURATION,
+                    }));
+                    this._stopMonitoringItemDrag();
+                    this._clearDragPlaceholder();
+                });
                 group.chip = chip;
                 this._windowList.add_child(chip);
             }
@@ -1699,6 +1739,18 @@ class WindowList extends St.Widget {
         this._layoutTabGroups();
     }
 
+    _getTabGroupActors(group) {
+        return [group.chip, ...this._getWindowButtons()
+            .filter(b => b.tabGroup === group)].filter(a => a);
+    }
+
+    _isInsideTabGroup(prev, next) {
+        if (prev instanceof TabGroupChip)
+            return !prev.group.collapsed;
+        return prev instanceof WindowButton && next instanceof WindowButton &&
+            prev.tabGroup !== null && prev.tabGroup === next.tabGroup;
+    }
+
     _joinTabGroupFromNeighbors(button) {
         const items = this._windowList.get_children().filter(c =>
             c !== this._dragPlaceholder && (c === button || c.visible));
@@ -1759,13 +1811,18 @@ class WindowList extends St.Widget {
     }
 
     handleDragOver(source, _actor, x, _y, _time) {
-        if (!(source instanceof BaseButton))
+        const isChip = source instanceof TabGroupChip;
+        if (!(source instanceof BaseButton) && !isChip)
             return DND.DragMotionResult.NO_DROP;
 
         // Chips take up room too, and collapsed members don't
         const buttons = this._windowList.get_children().filter(c =>
             (c instanceof BaseButton || c instanceof TabGroupChip) && c.visible);
         const buttonPos = buttons.indexOf(source);
+        // A dragged group spans its label and its shown windows
+        const span = isChip
+            ? 1 + buttons.filter(b => b.tabGroup === source.group).length
+            : 1;
         const numButtons = buttons.length;
         const boxWidth = this._windowList.width;
 
@@ -1789,8 +1846,11 @@ class WindowList extends St.Widget {
 
             this._lastPlaceholderUpdate = GLib.get_monotonic_time();
 
-            // Don't allow positioning before or after self
-            if (pos === buttonPos || pos === buttonPos + 1)
+            // Don't allow positioning before or after self, or a group
+            // inside another group
+            if (pos >= buttonPos && pos <= buttonPos + span)
+                return DND.DragMotionResult.CONTINUE;
+            if (isChip && this._isInsideTabGroup(buttons[pos - 1], buttons[pos]))
                 return DND.DragMotionResult.CONTINUE;
 
             this._dragPlaceholder = new DragPlaceholderItem();
@@ -1811,7 +1871,13 @@ class WindowList extends St.Widget {
         if (this._dragPlaceholder) {
             const pos = this._windowList.get_children()
                 .indexOf(this._dragPlaceholder);
-            this._windowList.set_child_at_index(source, pos);
+            if (source instanceof TabGroupChip) {
+                const members = this._getTabGroupActors(source.group);
+                members.forEach(a => this._windowList.set_child_below_sibling(
+                    a, this._dragPlaceholder));
+            } else {
+                this._windowList.set_child_at_index(source, pos);
+            }
 
             if (source instanceof WindowButton)
                 this._joinTabGroupFromNeighbors(source);
