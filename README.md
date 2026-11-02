@@ -2,6 +2,10 @@
 
 A GNOME Shell bottom window list with Chrome-style tab groups.
 
+![Bottom bar with tab groups](screenshots/overview.png)
+
+![Group menu: name, color, collapse, ungroup, close](screenshots/group-menu.png)
+
 - **Group windows:** right-click a window → **Add to new group**, then name the group and pick a color.
 - **Add or move:** right-click another window → **Add to “…”**, or drag it in next to the group's windows.
 - **Collapse:** click a group's colored label to hide its windows; click again to show them.
