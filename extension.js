@@ -26,9 +26,9 @@ const WINDOW_LIST_UUID = 'window-list@gnome-shell-extensions.gcampax.github.com'
 
 const TAB_GROUPS_KEY = 'window-list-tab-groups';
 
-const MIN_DRAG_UPDATE_INTERVAL = 500 * GLib.TIME_SPAN_MILLISECOND;
 const DRAG_OPACITY = 0.3;
 const DRAG_FADE_DURATION = 200;
+
 
 // Chrome's tab group palette (dark variants, readable with dark text)
 const TAB_GROUP_COLORS = {
@@ -46,14 +46,29 @@ const TAB_GROUP_COLORS = {
 const isWindowButton = actor => actor?.metaWindow !== undefined;
 const isListButton = actor => isWindowButton(actor) || actor?.app !== undefined;
 
+function hexToRgba(hex, alpha) {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// Shows where a dragged item will land; tinted in a group's color when the
+// item will join that group
 class DragPlaceholderItem extends DashItemContainer {
     static {
         GObject.registerClass(this);
     }
 
-    constructor() {
+    constructor(color = null) {
         super();
         this.setChild(new St.Bin({style_class: 'placeholder'}));
+        this.setColor(color);
+    }
+
+    setColor(color) {
+        this.child.style = color
+            ? `border: 2px solid ${color};
+               background-color: ${hexToRgba(color, 0.3)};`
+            : null;
     }
 }
 
@@ -527,36 +542,106 @@ class TabGroupController {
         this.layout();
     }
 
-    isInsideGroup(prev, next) {
-        if (prev instanceof TabGroupChip)
-            return !prev.group.collapsed;
-        return isWindowButton(prev) && isWindowButton(next) &&
-            !!prev._tabGroup && prev._tabGroup === next._tabGroup;
+    // Where a dragged window or group label would land with the pointer at
+    // x: an insertion position (among the list's children, not counting the
+    // drag placeholder) and the group the window will then belong to, or
+    // {join} for dropping onto a collapsed group's label. The position is
+    // always at the pointer; which item the pointer is over decides the
+    // group, so crossing a group's edge only changes the group.
+    dropTarget(source, x) {
+        const isChip = source instanceof TabGroupChip;
+        const sourceGroup = isChip ? source.group : source._tabGroup ?? null;
+        const moving = isChip ? this.groupActors(source.group) : [source];
+        const children = this._box.get_children()
+            .filter(c => !(c instanceof DragPlaceholderItem));
+        const items = children.filter(c =>
+            (isListButton(c) || c instanceof TabGroupChip) && c.visible &&
+            !moving.includes(c));
+        if (items.length === 0)
+            return null;
+
+        // Over the dragged item's own spot nothing moves
+        if (moving.some(c => c.visible && isOverActor(c, x)))
+            return null;
+
+        // Between items, take the nearest; past either end of the list is
+        // outside any group
+        const distance = c => {
+            const [cX] = c.get_transformed_position();
+            return Math.max(cX - x, x - (cX + c.width), 0);
+        };
+        const hovered = items.reduce((a, b) => (distance(b) < distance(a) ? b : a));
+        const [firstX] = items[0].get_transformed_position();
+        const last = items[items.length - 1];
+        const [lastX] = last.get_transformed_position();
+        const pastEnd = x < firstX || x >= lastX + last.width;
+        const [hoveredX] = hovered.get_transformed_position();
+        const fraction = (x - hoveredX) / hovered.width;
+        const before = children.indexOf(hovered);
+        const after = before + 1;
+        let group = hovered instanceof TabGroupChip
+            ? hovered.group : hovered._tabGroup ?? null;
+        if (pastEnd)
+            group = null;
+
+        const groupEnd = g => {
+            const actors = this.groupActors(g);
+            return children.indexOf(actors[actors.length - 1]) + 1;
+        };
+
+        // A group goes beside other groups, on the nearer side
+        if (isChip) {
+            if (!group)
+                return {pos: fraction < 0.5 ? before : after, group: null};
+            const span = items.filter(c => c === group.chip || c._tabGroup === group);
+            const [firstX] = span[0].get_transformed_position();
+            const last = span[span.length - 1];
+            const [lastX] = last.get_transformed_position();
+            return x < (firstX + lastX + last.width) / 2
+                ? {pos: children.indexOf(group.chip), group: null}
+                : {pos: groupEnd(group), group: null};
+        }
+
+        // A collapsed group's label: its middle adds to the group, its
+        // sides go beside it
+        if (hovered instanceof TabGroupChip && group?.collapsed) {
+            if (fraction < 1 / 3)
+                return {pos: before, group: null};
+            if (fraction > 2 / 3)
+                return {pos: groupEnd(group), group: null};
+            return group === sourceGroup ? null : {join: group};
+        }
+
+        // An open group's label: before it is outside, after it is inside
+        if (hovered instanceof TabGroupChip)
+            return fraction < 0.5 ? {pos: before, group: null} : {pos: after, group};
+
+        return {pos: fraction < 0.5 ? before : after, group};
     }
 
-    joinFromNeighbors(button) {
-        const items = this._box.get_children().filter(c =>
-            c !== this._list._dragPlaceholder && (c === button || c.visible));
-        const i = items.indexOf(button);
-        const prev = items[i - 1];
-        const next = items[i + 1];
-        const groupOf = a => (isWindowButton(a) ? a._tabGroup ?? null : null);
+    // Whether dropping on target would leave things as they are
+    isNoOpDrop(source, target) {
+        if (target.join)
+            return false;
+
+        const isChip = source instanceof TabGroupChip;
+        const moving = isChip ? this.groupActors(source.group) : [source];
+        const children = this._box.get_children()
+            .filter(c => !(c instanceof DragPlaceholderItem));
+        const start = children.indexOf(moving[0]);
+        const end = children.indexOf(moving[moving.length - 1]) + 1;
+        const sameGroup = isChip || target.group === (source._tabGroup ?? null);
+
+        return sameGroup && target.pos >= start && target.pos <= end;
+    }
+
+    setGroup(button, group) {
         const current = button._tabGroup ?? null;
-
-        // Landing right after an open group's label or windows joins it
-        let target = null;
-        if (prev instanceof TabGroupChip)
-            target = prev.group.collapsed ? null : prev.group;
-        else if (groupOf(prev))
-            target = groupOf(prev);
-        else if (current && groupOf(next) === current)
-            target = current;
-
-        if (target === current)
+        if (group === current)
             return;
 
         current?.windows.delete(button.metaWindow.get_id());
-        target?.windows.add(button.metaWindow.get_id());
+        group?.windows.add(button.metaWindow.get_id());
     }
 
     toggleGroup(group) {
@@ -624,90 +709,73 @@ function isOverActor(actor, x) {
     return x >= actorX && x < actorX + actor.width;
 }
 
-// Replaces WindowList.handleDragOver: counts group chips, skips collapsed
-// windows, and lets a chip carry its whole group
+// Replaces WindowList.handleDragOver: measures against the item under the
+// pointer, and handles group labels and joining groups
 function handleDragOver(source, _actor, x, _y, _time) {
-    const isChip = source instanceof TabGroupChip;
-    if (!isListButton(source) && !isChip)
+    if (!isListButton(source) && !(source instanceof TabGroupChip))
         return DND.DragMotionResult.NO_DROP;
 
-    const controller = getController(this);
-    const items = this._windowList.get_children().filter(c =>
-        (isListButton(c) || c instanceof TabGroupChip) && c.visible);
+    // Opening a gap shifts the items; keep it while the pointer is on it
+    if (this._dragPlaceholder && isOverActor(this._dragPlaceholder, x))
+        return DND.DragMotionResult.MOVE_DROP;
 
-    // Hovering a window over a group's label or windows offers to add it
-    // to that group
-    const hovered = isWindowButton(source)
-        ? items.find(c => c !== source && isOverActor(c, x))
-        : null;
-    const hoveredGroup = hovered instanceof TabGroupChip
-        ? hovered.group : hovered?._tabGroup ?? null;
-    const chip = hoveredGroup?.chip;
-    if (chip && hoveredGroup !== source._tabGroup) {
-        if (this._tabGroupDropChip !== chip) {
+    const controller = getController(this);
+    let target = controller.dropTarget(source, x);
+    if (target && controller.isNoOpDrop(source, target))
+        target = null;
+
+    const current = this._tabGroupDrop;
+    if (!target) {
+        if (current)
             this._clearDragPlaceholder();
-            this._tabGroupDropChip = chip;
-            chip.add_style_pseudo_class('drop');
-            // Any non-negative position lets the drop through
-            this._dragPlaceholderPos = Number.MAX_SAFE_INTEGER;
+        return DND.DragMotionResult.CONTINUE;
+    }
+
+    // Same spot: at most the gap's color changes
+    if (current?.join && current.join === target.join)
+        return DND.DragMotionResult.MOVE_DROP;
+    if (current && !current.join && !target.join && current.pos === target.pos &&
+        this._dragPlaceholder) {
+        if (current.group !== target.group) {
+            this._dragPlaceholder.setColor(
+                target.group ? TAB_GROUP_COLORS[target.group.color] : null);
+            this._tabGroupDrop = target;
         }
         return DND.DragMotionResult.MOVE_DROP;
     }
-    if (this._tabGroupDropChip)
-        this._clearDragPlaceholder();
 
-    const sourcePos = items.indexOf(source);
-    const span = isChip
-        ? 1 + items.filter(c => c._tabGroup === source.group).length
-        : 1;
-    const numItems = items.length;
-    const boxWidth = this._windowList.width;
+    this._clearDragPlaceholder();
+    this._tabGroupDrop = target;
+    // Any non-negative position lets the drop through
+    this._dragPlaceholderPos = Number.MAX_SAFE_INTEGER;
 
-    // Transform to window list coordinates for index calculation
-    x -= this._windowList.x;
-
-    const rtl = this.text_direction === Clutter.TextDirection.RTL;
-    let pos = rtl
-        ? numItems - Math.round(x * numItems / boxWidth)
-        : Math.round(x * numItems / boxWidth);
-
-    pos = Math.clamp(pos, 0, numItems);
-
-    const timeDelta = GLib.get_monotonic_time() - this._lastPlaceholderUpdate;
-
-    if (pos !== this._dragPlaceholderPos && timeDelta >= MIN_DRAG_UPDATE_INTERVAL) {
-        this._clearDragPlaceholder();
-        this._dragPlaceholderPos = pos;
-
-        this._lastPlaceholderUpdate = GLib.get_monotonic_time();
-
-        // Don't allow positioning next to self, or a group inside another
-        if (pos >= sourcePos && pos <= sourcePos + span)
-            return DND.DragMotionResult.CONTINUE;
-        if (isChip && controller.isInsideGroup(items[pos - 1], items[pos]))
-            return DND.DragMotionResult.CONTINUE;
-
-        this._dragPlaceholder = new DragPlaceholderItem();
-        const sibling = items[pos] ?? null;
-        if (sibling)
-            this._windowList.insert_child_below(this._dragPlaceholder, sibling);
-        else
-            this._windowList.insert_child_above(this._dragPlaceholder, null);
-        this._dragPlaceholder.show(true);
+    if (target.join) {
+        target.join.chip.add_style_pseudo_class('drop');
+        return DND.DragMotionResult.MOVE_DROP;
     }
 
-    return this._dragPlaceholder
-        ? DND.DragMotionResult.MOVE_DROP
-        : DND.DragMotionResult.NO_DROP;
+    // The gap takes the color of the group the window will end up in
+    this._dragPlaceholder = new DragPlaceholderItem(
+        target.group ? TAB_GROUP_COLORS[target.group.color] : null);
+    const sibling = this._windowList.get_children()
+        .filter(c => !(c instanceof DragPlaceholderItem))[target.pos] ?? null;
+    if (sibling)
+        this._windowList.insert_child_below(this._dragPlaceholder, sibling);
+    else
+        this._windowList.insert_child_above(this._dragPlaceholder, null);
+    this._dragPlaceholder.show(true);
+
+    return DND.DragMotionResult.MOVE_DROP;
 }
 
 // Replaces WindowList.acceptDrop
 function acceptDrop(source, _actor, _x, _y, _time) {
     const controller = getController(this);
+    const drop = this._tabGroupDrop;
 
-    if (this._tabGroupDropChip) {
-        controller.moveToGroup(source, this._tabGroupDropChip.group);
-    } else if (this._dragPlaceholder) {
+    if (drop?.join) {
+        controller.moveToGroup(source, drop.join);
+    } else if (drop && this._dragPlaceholder) {
         if (source instanceof TabGroupChip) {
             controller.groupActors(source.group).forEach(a =>
                 this._windowList.set_child_below_sibling(a, this._dragPlaceholder));
@@ -717,7 +785,7 @@ function acceptDrop(source, _actor, _x, _y, _time) {
             this._windowList.set_child_at_index(source, pos);
 
             if (isWindowButton(source))
-                controller.joinFromNeighbors(source);
+                controller.setGroup(source, drop.group ?? null);
         }
     }
 
@@ -827,8 +895,8 @@ export default class WindowListTabGroupsExtension extends Extension {
 
         this._injections.overrideMethod(proto, '_clearDragPlaceholder',
             original => function () {
-                this._tabGroupDropChip?.remove_style_pseudo_class('drop');
-                delete this._tabGroupDropChip;
+                this._tabGroupDrop?.join?.chip?.remove_style_pseudo_class('drop');
+                delete this._tabGroupDrop;
                 original.call(this);
             });
 
