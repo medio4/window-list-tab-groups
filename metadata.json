@@ -4,6 +4,8 @@
   "uuid": "window-list-tab-groups@jacobcorbley",
   "gettext-domain": "window-list-tab-groups",
   "shell-version": [
+    "48",
+    "49",
     "50"
   ],
   "url": "https://github.com/medio4/window-list-tab-groups",

@@ -26,7 +26,7 @@ Grouped windows get an underline in their group's color. Groups survive screen l
 extension reloads, and reset when you log out. Turning the add-on off puts the Window List
 back exactly as it was.
 
-Supports GNOME Shell 50.
+Supports GNOME Shell 48–50 (earlier Window List versions can't reorder windows by dragging).
 
 ## Install
 
